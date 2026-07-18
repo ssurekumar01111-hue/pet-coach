@@ -163,7 +163,7 @@ This bypasses real SMS entirely — enter the number, then the fixed code, and y
 
 ## AI / Codex collaboration
 
-I built this end-to-end in **OpenAI Codex**, in a single continuous session — I never opened a new chat window, so the entire build (scaffolding through the last bug fix) happened in one ongoing conversation with full context the whole way through. Here's roughly how the collaboration went:
+I built this end-to-end in **OpenAI Codex**, in a single continuous session , so the entire build (scaffolding through the last bug fix) happened in one ongoing conversation with full context the whole way through. Here's roughly how the collaboration went:
 
 - **Scaffolding & architecture** — Codex generated the initial GetX module structure, Firestore data models, and Cloud Functions skeleton from a written spec; I made the product and structural decisions (which features, what data model, GetX vs. alternatives).
 - **The AI provider layer** — Codex implemented the dual-provider (OpenAI/Gemini) adapter behind one interface, including schema validation, token caps, and Firestore-transaction rate limiting. This is where GPT-5.6 (`gpt-5.6-luna`, via the Responses API) is directly used.
@@ -194,8 +194,6 @@ I didn't trust this to "probably work" — the walk/run detector especially, sin
 Debug-only, on-device field-test logging (GPS accuracy, cadence, walk/run transitions, voice cue timing, battery drain) was built specifically to support this iterative process — logs can be shared directly from the device via the Profile screen, without needing a tethered connection.
 
 ---
-
-# README Addition
 
 ## Why this isn't just another running app
 
