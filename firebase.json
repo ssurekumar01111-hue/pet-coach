@@ -1,1 +1,28 @@
-{"firestore":{"rules":"firestore.rules"},"functions":[{"source":"functions","codebase":"default"}],"flutter":{"platforms":{"android":{"default":{"projectId":"pet-coach-ai","appId":"1:1020653082569:android:b4a81a75b7f06c7bd3fa18","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"pet-coach-ai","configurations":{"android":"1:1020653082569:android:b4a81a75b7f06c7bd3fa18"}}}}}}
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "functions": [
+    {"source": "functions", "codebase": "default"}
+  ],
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "pet-coach-ai",
+          "appId": "1:1020653082569:android:b4a81a75b7f06c7bd3fa18",
+          "fileOutput": "android/app/google-services.json"
+        }
+      }
+    },
+    "dart": {
+      "lib/firebase_options.dart": {
+        "projectId": "pet-coach-ai",
+        "configurations": {
+          "android": "1:1020653082569:android:b4a81a75b7f06c7bd3fa18"
+        }
+      }
+    }
+  }
+}

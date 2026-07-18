@@ -15,6 +15,9 @@ class WalkRunDetector {
   final List<RunSegment> _segments = [];
 
   String get currentState => _state ?? 'walking';
+  double? get rollingAverageSpeed => _speeds.isEmpty
+      ? null
+      : _speeds.reduce((sum, value) => sum + value) / _speeds.length;
   List<RunSegment> get segments => List.unmodifiable(_segments);
 
   void reset() {

@@ -3,10 +3,14 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key>
-  <string>PET Coach AI</string>
+  <string>PET Coach</string>
+  <key>CFBundleName</key>
+  <string>PET Coach</string>
   <key>NSLocationWhenInUseUsageDescription</key>
-  <string>PET Coach AI needs location access to track your run distance and pace</string>
+  <string>PET Coach needs location access to track your run distance and pace</string>
   <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-  <string>PET Coach AI needs location access to track your run distance and pace</string>
+  <string>PET Coach needs location access to track your run distance and pace</string>
+  <key>NSMotionUsageDescription</key>
+  <string>PET Coach uses step motion to distinguish running from GPS drift.</string>
 </dict>
 </plist>

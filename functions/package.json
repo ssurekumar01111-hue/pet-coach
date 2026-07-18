@@ -1,16 +1,23 @@
 {
   "name": "pet-coach-ai-functions",
-  "engines": { "node": "20" },
+  "engines": {
+    "node": "20"
+  },
   "main": "lib/index.js",
   "scripts": {
     "build": "tsc",
     "serve": "npm run build && firebase emulators:start --only functions",
     "deploy": "firebase deploy --only functions",
-    "seed:exam-configs": "npm run build && node lib/scripts/seedExamConfigs.js"
+    "seed:exam-configs": "npm run build && node lib/scripts/seedExamConfigs.js",
+    "seed:test-sessions": "npm run build && node lib/scripts/seedTestSessions.js",
+    "test": "npm run build && node --test lib/ai/tests/*.test.js lib/qualification/tests/*.test.js lib/recovery/tests/*.test.js"
   },
   "dependencies": {
     "firebase-admin": "^12.7.0",
     "firebase-functions": "^6.0.1"
   },
-  "devDependencies": { "@types/node": "^22.7.5", "typescript": "^5.6.3" }
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "typescript": "^5.6.3"
+  }
 }

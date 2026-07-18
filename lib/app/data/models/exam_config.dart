@@ -6,11 +6,13 @@ class ExamConfig {
     required this.distanceKm,
     required this.timeLimitMin,
     required this.name,
+    this.approximate = false,
   });
   final String id;
   final double distanceKm;
   final double timeLimitMin;
   final String name;
+  final bool approximate;
 
   factory ExamConfig.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data()!;
@@ -19,6 +21,7 @@ class ExamConfig {
       distanceKm: (data['distanceKm'] as num).toDouble(),
       timeLimitMin: (data['timeLimitMin'] as num).toDouble(),
       name: data['name'] as String,
+      approximate: data['approximate'] as bool? ?? false,
     );
   }
 
@@ -26,5 +29,6 @@ class ExamConfig {
         'distanceKm': distanceKm,
         'timeLimitMin': timeLimitMin,
         'name': name,
+        'approximate': approximate,
       };
 }

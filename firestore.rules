@@ -5,10 +5,32 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
     match /sessions/{sessionId} {
-      allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
-      allow read, update, delete: if request.auth != null && resource.data.uid == request.auth.uid;
+      // Raw run data is client-owned. Qualification, AI feedback, and recovery
+      // are Cloud Function-owned fields and must never be client supplied.
+      allow create: if request.auth != null
+        && request.resource.data.uid == request.auth.uid
+        && !request.resource.data.keys().hasAny([
+          'qualifiedDeterministic',
+          'aiSummary',
+          'recoverySummary',
+        ]);
+      allow update: if request.auth != null
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'qualifiedDeterministic',
+          'aiSummary',
+          'recoverySummary',
+        ]);
+      allow read, delete: if request.auth != null && resource.data.uid == request.auth.uid;
     }
     match /exam_configs/{examId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    // Entries are a privacy-safe projection maintained by Cloud Functions.
+    // Clients can read rankings, but can never forge or edit a score.
+    match /leaderboards/{examId}/entries/{entryId} {
       allow read: if request.auth != null;
       allow write: if false;
     }

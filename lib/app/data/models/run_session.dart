@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'ai_summary.dart';
 import 'gps_point.dart';
 import 'run_segment.dart';
+import 'recovery_summary.dart';
 
 class RunSession {
   const RunSession({
@@ -17,6 +18,8 @@ class RunSession {
     required this.totalDistanceKm,
     required this.totalTimeSec,
     this.aiSummary,
+    this.qualifiedDeterministic,
+    this.recoverySummary,
   });
   final String id;
   final String uid;
@@ -28,6 +31,8 @@ class RunSession {
   final double totalDistanceKm;
   final int totalTimeSec;
   final AiSummary? aiSummary;
+  final bool? qualifiedDeterministic;
+  final RecoverySummary? recoverySummary;
 
   /// Sums only accepted (sampled) GPS points. GPS jumps are filtered by tracker.
   double computeTotalDistanceKm() {
@@ -37,9 +42,6 @@ class RunSession {
     }
     return metres / 1000;
   }
-
-  int computeTotalTimeSec({DateTime? now}) =>
-      (endTime ?? now ?? DateTime.now()).difference(startTime).inSeconds;
 
   /// Keeps the complete run distributed across its duration if it is very long.
   List<GpsPoint> sampledGpsTrackForStorage({int maxPoints = 500}) {
@@ -88,6 +90,12 @@ class RunSession {
           : AiSummary.fromMap(
               Map<String, dynamic>.from(data['aiSummary'] as Map),
             ),
+      qualifiedDeterministic: data['qualifiedDeterministic'] as bool?,
+      recoverySummary: data['recoverySummary'] == null
+          ? null
+          : RecoverySummary.fromMap(
+              Map<String, dynamic>.from(data['recoverySummary'] as Map),
+            ),
     );
   }
 
@@ -100,7 +108,77 @@ class RunSession {
             sampledGpsTrackForStorage().map((point) => point.toMap()).toList(),
         'segments': segments.map((segment) => segment.toMap()).toList(),
         'totalDistanceKm': computeTotalDistanceKm(),
-        'totalTimeSec': computeTotalTimeSec(),
-        'aiSummary': aiSummary?.toMap(),
+        // This is the stopwatch-tracked active duration. Deriving it from
+        // wall-clock timestamps would incorrectly include paused time.
+        'totalTimeSec': totalTimeSec,
+        // These fields are Cloud Function-owned and deliberately omitted from
+        // every client write. They are read back through [fromFirestore].
       };
+
+  /// Hive-friendly representation for offline storage. Dates are ISO strings
+  /// so no Firestore types or generated Hive adapters are needed on device.
+  Map<String, dynamic> toLocalMap() => {
+        'id': id,
+        'uid': uid,
+        'examId': examId,
+        'startTime': startTime.toIso8601String(),
+        'endTime': endTime?.toIso8601String(),
+        'gpsTrack': sampledGpsTrackForStorage()
+            .map((point) => {
+                  'latitude': point.latitude,
+                  'longitude': point.longitude,
+                  'timestamp': point.timestamp.toIso8601String(),
+                  'accuracy': point.accuracy,
+                })
+            .toList(),
+        'segments': segments
+            .map((segment) => {
+                  'type': segment.type,
+                  'startTime': segment.startTime.toIso8601String(),
+                  'endTime': segment.endTime.toIso8601String(),
+                  'distanceKm': segment.distanceKm,
+                  'avgPaceSecPerKm': segment.avgPaceSecPerKm,
+                  'activeDurationSec': segment.activeDurationSec,
+                })
+            .toList(),
+        'totalDistanceKm': totalDistanceKm,
+        'totalTimeSec': totalTimeSec,
+        'qualifiedDeterministic': qualifiedDeterministic,
+      };
+
+  factory RunSession.fromLocalMap(Map<String, dynamic> map) => RunSession(
+        id: map['id'] as String,
+        uid: map['uid'] as String,
+        examId: map['examId'] as String,
+        startTime: DateTime.parse(map['startTime'] as String),
+        endTime: map['endTime'] is String
+            ? DateTime.parse(map['endTime'] as String)
+            : null,
+        gpsTrack:
+            ((map['gpsTrack'] as List<dynamic>?) ?? const []).map((value) {
+          final point = Map<String, dynamic>.from(value as Map);
+          return GpsPoint(
+            latitude: (point['latitude'] as num).toDouble(),
+            longitude: (point['longitude'] as num).toDouble(),
+            timestamp: DateTime.parse(point['timestamp'] as String),
+            accuracy: (point['accuracy'] as num?)?.toDouble(),
+          );
+        }).toList(),
+        segments:
+            ((map['segments'] as List<dynamic>?) ?? const []).map((value) {
+          final segment = Map<String, dynamic>.from(value as Map);
+          return RunSegment(
+            type: segment['type'] as String,
+            startTime: DateTime.parse(segment['startTime'] as String),
+            endTime: DateTime.parse(segment['endTime'] as String),
+            distanceKm: (segment['distanceKm'] as num).toDouble(),
+            avgPaceSecPerKm: (segment['avgPaceSecPerKm'] as num).toDouble(),
+            activeDurationSec:
+                (segment['activeDurationSec'] as num?)?.toDouble(),
+          );
+        }).toList(),
+        totalDistanceKm: (map['totalDistanceKm'] as num).toDouble(),
+        totalTimeSec: (map['totalTimeSec'] as num).toInt(),
+        qualifiedDeterministic: map['qualifiedDeterministic'] as bool?,
+      );
 }
