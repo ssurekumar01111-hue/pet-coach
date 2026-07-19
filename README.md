@@ -151,6 +151,7 @@ flutter run
 ---
 
 ## Judge / reviewer testing
+**Quickest way to try it:** download the signed APK from [Releases](https://github.com/ssurekumar01111-hue/pet-coach/releases/latest) and install it directly — no build required.
 
 Sign-in uses phone number + OTP. To test without a real SIM, use the Firebase test number configured in this project's Authentication console:
 
