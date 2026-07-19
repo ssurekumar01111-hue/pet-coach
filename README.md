@@ -6,6 +6,8 @@ PET Coach is a mobile app for candidates preparing for Indian government recruit
 
 Built for **OpenAI Build Week**, using **OpenAI Codex** and **GPT-5.6**.
 
+Designed and developed with OpenAI Codex using GPT-5.6 Terra, while supporting both Gemini Flash-Lite (default) and GPT-5.6 as interchangeable AI coaching providers.
+
 ## Why I built this
 
 I'm a Flutter/Firebase developer based in Uttar Pradesh, and PET recruitment is a genuinely big deal here — every year, large numbers of candidates train for UP Home Guard, UP Police, CRPF, and similar exams, and the physical test is often the part that trips people up, not the written one. Every running app out there treats a 4.8km run like a 4.8km run — none of them know what "qualifying" actually means for a specific exam, or reliably tell walking and running apart when someone's pace sits right at the edge.
@@ -61,7 +63,7 @@ UP Home Guard · UP Police · SSC GD · Delhi Police · CRPF · CISF · BSF · A
 | Auth | Firebase Phone Authentication |
 | Data | Cloud Firestore |
 | Backend | Firebase Cloud Functions (TypeScript, Node 20) |
-| AI | Gemini 3.1 Flash Lite (default) and GPT-5.6 (`gpt-5.6-luna`, OpenAI Responses API, selectable) — swappable behind one provider interface |
+| AI | Gemini 3.1 Flash Lite (default coaching model) and GPT-5.6 (`gpt-5.6-luna`, OpenAI Responses API — selectable as an alternate provider) — swappable behind one shared interface |
 | Location | `geolocator` (GPS) + device pedometer (step cadence) |
 | Voice | `flutter_tts` |
 | Offline storage | Hive |
@@ -155,7 +157,7 @@ flutter run
 
 Sign-in uses phone number + OTP. To test without a real SIM, use the Firebase test number configured in this project's Authentication console:
 
-- **Test phone:** `<+91 9999999999>`
+- **Test phone:** `+91 9999999999`
 - **Test OTP:** `123456`
 
 This bypasses real SMS entirely — enter the number, then the fixed code, and you're in.
@@ -164,20 +166,22 @@ This bypasses real SMS entirely — enter the number, then the fixed code, and y
 
 ## AI / Codex collaboration
 
-I built this end-to-end in **OpenAI Codex**, in a single continuous session , so the entire build (scaffolding through the last bug fix) happened in one ongoing conversation with full context the whole way through. Here's roughly how the collaboration went:
+I built PET Coach end-to-end with OpenAI Codex using GPT-5.6 Terra. The project evolved in one continuous development session, so the same context carried from the initial architecture decisions through feature implementation, debugging, field testing, and final refinements. Here's roughly how the collaboration went:
 
 - **Scaffolding & architecture** — Codex generated the initial GetX module structure, Firestore data models, and Cloud Functions skeleton from a written spec; I made the product and structural decisions (which features, what data model, GetX vs. alternatives).
-- **The AI provider layer** — Codex implemented the dual-provider (OpenAI/Gemini) adapter behind one interface, including schema validation, token caps, and Firestore-transaction rate limiting. This is where GPT-5.6 (`gpt-5.6-luna`, via the Responses API) is directly used.
-- **The hardest engineering problem — walk/run detection** — this went through several real, field-tested iterations with Codex:
+- **The AI provider layer** — Codex implemented the provider abstraction, schema validation, token limits, and Firestore transaction-based rate limiting. The architecture supports both Gemini and GPT-5.6 behind a shared provider interface, with Gemini Flash-Lite serving as the default coaching model in the current build.
+- **The most difficult engineering problem — walk/run detection** — this went through several real, field-tested iterations with Codex:
   1. Initial GPS-speed-only detection worked, but real-device field testing (sitting stationary) revealed GPS drift was causing false "running" readings.
   2. Codex implemented accuracy-radius GPS filtering — insufficient on its own, since GPS-reported accuracy is often optimistic.
-  3. Root-caused (with reference to how Strava/Nike Run Club actually solve this) that GPS alone is fundamentally noisy at low speeds, and the fix was accelerometer-based step cadence as the *primary* signal, with GPS as a secondary veto — Codex implemented this dual-signal system, including a debounce mechanism.
+  3. After researching modern approaches to low-speed movement detection, I redesigned the tracker around accelerometer-based step cadence as the primary signal, with GPS acting as a secondary validation layer — Codex implemented this dual-signal system, including a debounce mechanism.
   4. Further field testing found the debounce had a bug (firing on 1/2 confirmations, not 2/2) and that cadence alone still produced false positives during normal walking (arm/phone motion mistaken for running steps) — fixed with a GPS-speed veto specifically gating cadence-triggered "running" transitions.
   5. Each round was verified against real on-device field-test logs (GPS accuracy, cadence, transition timestamps), not just code review — see [Testing & Validation](#testing--validation).
 - **Security hardening** — a self-directed repository audit surfaced a real Firestore integrity gap (clients could write AI/qualification result fields directly, undermining the deterministic-qualification guarantee); Codex implemented the rules fix.
 - **UI/UX** — Codex built three distinct visual-direction previews (tactical, athletic, SaaS-style) for live on-device comparison; the athletic direction was chosen for practical reasons (outdoor sunlight readability) and implemented as the app-wide design system.
 
-**Codex Session ID:** `<019f6557-42bb-77f3-8caf-b329d6259968>`
+I'll be honest — a good chunk of this build was me finding something broken through real testing, describing exactly what I saw, and going back and forth with Codex until the fix actually held up against a fresh test, not just a green checkmark. That loop is most of what "how we built it" actually means here.
+
+**Codex Session ID:** `019f6557-42bb-77f3-8caf-b329d6259968`
 
 ---
 
@@ -198,55 +202,23 @@ Debug-only, on-device field-test logging (GPS accuracy, cadence, walk/run transi
 
 ## Why this isn't just another running app
 
-  -----------------------------------------------------------------------
-  Generic Running Apps                PET Coach
-  ----------------------------------- -----------------------------------
-  Built for general fitness, races,   Built specifically for Indian
-  and recreational runners            government Physical Efficiency Test
-                                      (PET) candidates
+| | Generic running apps | PET Coach |
+|---|---|---|
+| **Built for** | General fitness, races, recreational runners | Indian government PET candidates specifically |
+| **Shows** | Pace, distance, calories | Deterministic qualification against official PET standards |
+| **Coaching** | Generic training advice | Exam-specific, tied to the recruitment body you actually selected |
+| **Movement detection** | Treats all fast movement as running | Dual-signal (step cadence + GPS veto) to separate walking from running at PET training speeds |
+| **Progress tracking** | Fitness metrics | Exam readiness, qualification trend, recovery, daily targets |
+| **Goals** | One-size-fits-all | Exam-specific standards per recruitment body |
+| **Focus** | Athletic performance | Passing a specific, real physical test |
 
-  Shows pace, distance, and calories  Shows **deterministic
-                                      qualification** against official
-                                      PET distance/time standards
+I'd sum up the whole design philosophy in one line: **fitness apps optimize training, PET Coach optimizes qualification.** That's why the qualification result and leaderboard eligibility are computed with deterministic server-side logic — not an LLM — while everything else that benefits from AI (coaching tone, plans, explanations) actually gets it.
 
-  Generic training advice             Exam-specific AI coaching tailored
-                                      to your selected recruitment exam
-
-  Treats all movement as running      Uses **dual-signal walk/run
-                                      detection** (step cadence + GPS
-                                      veto) to distinguish walking from
-                                      running more reliably at PET
-                                      training speeds
-
-  Measures fitness progress           Measures **exam readiness**,
-                                      qualification trends, recovery, and
-                                      personalized daily targets
-
-  One-size-fits-all goals             Supports multiple recruitment exams
-                                      with exam-specific standards and
-                                      guidance
-
-  Focuses on athletic performance     Focuses on helping candidates pass
-                                      real-world recruitment physical
-                                      tests
-  -----------------------------------------------------------------------
-
-PET Coach is designed around a simple principle:
-
-> **Fitness apps optimize training. PET Coach optimizes qualification.**
-
-Every architectural decision follows that philosophy. Deterministic
-server-side logic computes qualification and leaderboard eligibility,
-while AI provides personalized coaching, explanations, and adaptive
-planning---never the official pass/fail decision. The result is a
-coaching experience that combines trustworthy exam-specific calculations
-with flexible AI guidance, rather than treating an LLM as the source of
-truth.
-
+---
 
 ## Known limitations & roadmap
 
-This was built end-to-end during a hackathon build window, and I'd rather be upfront about what's not production-ready yet than let it come as a surprise:
+PET Coach was built during the OpenAI Build Week hackathon, so there are still a few areas I'd improve before calling it production-ready:
 
 **Before any public release:**
 - Background GPS tracking is not implemented — the app must stay in the foreground during a run. `ACCESS_BACKGROUND_LOCATION` is currently declared but unused and should be either implemented properly (foreground service + persistent notification) or removed.
@@ -264,4 +236,4 @@ This was built end-to-end during a hackathon build window, and I'd rather be upf
 
 ## License
 
-<fill in your chosen license>
+MIT License — see [LICENSE](LICENSE) for details.
