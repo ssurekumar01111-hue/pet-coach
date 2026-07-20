@@ -38,7 +38,7 @@ class TrackerView extends GetView<TrackerController> {
         child: Stack(
           children: [
             Obx(
-              () => Padding(
+              () => SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -69,7 +69,7 @@ class TrackerView extends GetView<TrackerController> {
                         ),
                       ),
                     ],
-                    const Spacer(),
+                    const SizedBox(height: 24),
                     _controls(context, tokens),
                   ],
                 ),
@@ -306,6 +306,24 @@ class TrackerView extends GetView<TrackerController> {
           icon: const Icon(Icons.play_arrow_rounded),
           label: const Text('Start run'),
         ),
+        if (kDebugMode) ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: controller.isDemoSimulationRunning.value
+                ? null
+                : controller.startDemoSimulation,
+            icon: const Icon(Icons.smart_display_outlined, size: 18),
+            label: const Text('SIMULATE (DEMO ONLY)'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: tokens.slate,
+              textStyle: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                letterSpacing: .7,
+              ),
+            ),
+          ),
+        ],
       ]);
     }
     return Row(children: [

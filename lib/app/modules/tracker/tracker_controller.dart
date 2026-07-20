@@ -17,8 +17,10 @@ import '../../data/models/run_session.dart';
 import '../../services/hydration_service.dart';
 import '../../services/field_test_log_service.dart';
 import '../../services/offline_session_sync_service.dart';
-import 'gps_movement_filter.dart';
+import 'gps_distance_accumulator.dart';
 import 'movement_segment_recorder.dart';
+import 'motion_fusion_detector.dart';
+import 'simulate_run_service.dart';
 import 'step_cadence_detector.dart';
 import 'walk_run_detector.dart';
 
@@ -44,7 +46,6 @@ class TrackerController extends GetxController {
   static const _voiceCueIntervalKm = .5;
   static const _batterySampleInterval = Duration(minutes: 5);
   static const _emaAlpha = .35;
-  static const _minimumGpsSpeedForRunningMetresPerSecond = 1.9;
 
   final FirebaseAuth _auth;
   final FlutterTts _tts;
@@ -64,24 +65,28 @@ class TrackerController extends GetxController {
   final debugBatteryPercent = RxnInt();
   final stepCadenceSpm = 0.0.obs;
   final isStepSensorAvailable = false.obs;
+  final isDemoSimulationRunning = false.obs;
 
   final List<GpsPoint> _sampledPoints = [];
   final WalkRunDetector _detector = WalkRunDetector();
+  final GpsDistanceAccumulator _distanceAccumulator = GpsDistanceAccumulator();
+  final MotionFusionDetector _motionFusion = MotionFusionDetector();
   final MovementSegmentRecorder _movementSegmentRecorder =
       MovementSegmentRecorder();
   final StepCadenceDetector _stepCadenceDetector = StepCadenceDetector();
+  final SimulateRunService _simulateRunService = SimulateRunService();
   final Stopwatch _stopwatch = Stopwatch();
   StreamSubscription<Position>? _positionSubscription;
   Timer? _elapsedTimer;
   Timer? _batteryTimer;
-  GpsPoint? _lastObservedRawPoint;
   GpsPoint? _lastSmoothedPoint;
-  GpsPoint? _lastValidRawPoint;
+  GpsPoint? _lastAcceptedRawPoint;
   GpsPoint? _lastPersistedPoint;
   DateTime? _sessionStart;
   String? _sessionId;
   double _nextVoiceCueAtKm = _voiceCueIntervalKm;
   bool _isSpeaking = false;
+  var _isDemoSession = false;
   StepCadenceReading? _lastCadenceReading;
 
   @override
@@ -96,40 +101,9 @@ class TrackerController extends GetxController {
     if (!await _ensureLocationPermission()) return;
 
     if (isPaused.value) {
-      isPaused.value = false;
-      _stopwatch.start();
-      _movementSegmentRecorder.resume(DateTime.now());
+      _resumeTrackingSession();
     } else {
-      _detector.reset();
-      _sampledPoints.clear();
-      _lastObservedRawPoint = null;
-      _lastSmoothedPoint = null;
-      _lastValidRawPoint = null;
-      _stepCadenceDetector.reset();
-      _lastCadenceReading = null;
-      _lastPersistedPoint = null;
-      _sessionStart = DateTime.now();
-      movementState.value = 'walking';
-      _movementSegmentRecorder.begin(
-        state: movementState.value,
-        at: _sessionStart!,
-      );
-      if (kDebugMode) {
-        try {
-          await _fieldTestLog.startSession(_sessionStart!);
-        } catch (_) {
-          debugPrint('[FieldTestLog] unable to create session log');
-        }
-      }
-      _sessionId = FirebaseFirestore.instance.collection('sessions').doc().id;
-      distanceKm.value = 0;
-      currentPaceSecPerKm.value = 0;
-      gpsJumpCount.value = 0;
-      _nextVoiceCueAtKm = _voiceCueIntervalKm;
-      _stopwatch
-        ..reset()
-        ..start();
-      isTracking.value = true;
+      await _beginNewTrackingSession();
     }
     _startElapsedTimer();
     _startDebugBatterySampling();
@@ -144,8 +118,78 @@ class TrackerController extends GetxController {
     });
   }
 
+  /// Starts a synthetic debug session without requesting device sensor input.
+  /// The simulator feeds the normal GPS/cadence processing pipeline below.
+  Future<void> startDemoSimulation() async {
+    if (!kDebugMode || isTracking.value || isDemoSimulationRunning.value) {
+      return;
+    }
+    errorMessage.value = null;
+    await _beginNewTrackingSession(isDemo: true);
+    _startElapsedTimer();
+    _startDebugBatterySampling();
+    _stepCadenceDetector.enableSyntheticInput();
+    isStepSensorAvailable.value = true;
+    _motionFusion.setCadenceSensorAvailable(true, DateTime.now());
+    isDemoSimulationRunning.value = true;
+    try {
+      await _simulateRunService.run(
+        onGpsPoint: _processGpsPoint,
+        onStepCount: _injectSyntheticStepCount,
+        isActive: () =>
+            isTracking.value &&
+            !isPaused.value &&
+            isDemoSimulationRunning.value,
+      );
+    } finally {
+      isDemoSimulationRunning.value = false;
+    }
+  }
+
+  Future<void> _beginNewTrackingSession({bool isDemo = false}) async {
+    _isDemoSession = isDemo;
+    _detector.reset();
+    _distanceAccumulator.reset();
+    _motionFusion.reset();
+    _sampledPoints.clear();
+    _lastSmoothedPoint = null;
+    _lastAcceptedRawPoint = null;
+    _stepCadenceDetector.reset();
+    _lastCadenceReading = null;
+    _lastPersistedPoint = null;
+    _sessionStart = DateTime.now();
+    movementState.value = 'walking';
+    _movementSegmentRecorder.begin(
+      state: movementState.value,
+      at: _sessionStart!,
+    );
+    if (kDebugMode) {
+      try {
+        await _fieldTestLog.startSession(_sessionStart!);
+      } catch (_) {
+        debugPrint('[FieldTestLog] unable to create session log');
+      }
+    }
+    _sessionId = FirebaseFirestore.instance.collection('sessions').doc().id;
+    distanceKm.value = 0;
+    currentPaceSecPerKm.value = 0;
+    gpsJumpCount.value = 0;
+    _nextVoiceCueAtKm = _voiceCueIntervalKm;
+    _stopwatch
+      ..reset()
+      ..start();
+    isTracking.value = true;
+  }
+
+  void _resumeTrackingSession() {
+    isPaused.value = false;
+    _stopwatch.start();
+    _movementSegmentRecorder.resume(DateTime.now());
+  }
+
   Future<void> pause() async {
     if (!isTracking.value || isPaused.value) return;
+    isDemoSimulationRunning.value = false;
     isPaused.value = true;
     _stopwatch.stop();
     _movementSegmentRecorder.pause(DateTime.now());
@@ -158,6 +202,7 @@ class TrackerController extends GetxController {
 
   Future<void> stop() async {
     if (!isTracking.value) return;
+    isDemoSimulationRunning.value = false;
     await _positionSubscription?.cancel();
     _positionSubscription = null;
     _elapsedTimer?.cancel();
@@ -165,7 +210,13 @@ class TrackerController extends GetxController {
     await _stepCadenceDetector.stop();
     _stopwatch.stop();
     await _stopSpeaking();
-    final endTime = DateTime.now();
+    final wallClockEndTime = DateTime.now();
+    final syntheticEndTime =
+        _isDemoSession ? _lastAcceptedRawPoint?.timestamp : null;
+    final endTime =
+        syntheticEndTime != null && syntheticEndTime.isAfter(wallClockEndTime)
+            ? syntheticEndTime
+            : wallClockEndTime;
     final segments = _movementSegmentRecorder.finish(endTime);
     final uid = _auth.currentUser?.uid;
     if (uid != null && _sessionStart != null && _sessionId != null) {
@@ -187,6 +238,7 @@ class TrackerController extends GetxController {
     }
     isTracking.value = false;
     isPaused.value = false;
+    _isDemoSession = false;
   }
 
   Future<bool> _ensureLocationPermission() async {
@@ -215,79 +267,97 @@ class TrackerController extends GetxController {
       timestamp: position.timestamp,
       accuracy: position.accuracy,
     );
-    final previousObserved = _lastObservedRawPoint;
-    _lastObservedRawPoint = point;
-    if (previousObserved == null) {
-      _debugGpsFilter(
-        rawDistanceMetres: 0,
-        accuracyMetres: point.accuracy,
-        passed: true,
-        isInitialPoint: true,
+    _processGpsPoint(point);
+  }
+
+  /// Shared by real [Position] updates and the debug simulator. Keeping the
+  /// filtering/persistence path here prevents demo-only shortcuts.
+  void _processGpsPoint(GpsPoint point) {
+    final update = _distanceAccumulator.add(point);
+    _debugGpsDistanceUpdate(update);
+
+    if (update.isRejectedJump) {
+      _debugGps(
+        point,
+        speed: update.rawSegmentSpeedMetresPerSecond,
+        passed: false,
       );
-      _acceptMovementPoint(point);
+      gpsJumpCount.value++;
       return;
     }
 
-    final rawDistance =
-        GpsMovementFilter.haversineMetres(previousObserved, point);
-    final movement = GpsMovementFilter.evaluate(
-      rawDistanceMetres: rawDistance,
-      currentAccuracyMetres: point.accuracy,
-    );
-    _debugGpsFilter(
-      rawDistanceMetres: movement.rawDistanceMetres,
-      accuracyMetres: movement.accuracyMetres,
-      passed: movement.countsAsMovement,
-      requiredDisplacementMetres: movement.requiredDisplacementMetres,
-    );
-    if (!movement.countsAsMovement) return;
+    // GPS movement evidence is intentionally independent of the canonical
+    // distance acceptance buffer. This lets two good, sustained running-speed
+    // samples promote a run promptly while still keeping distance drift out.
+    if (update.hasGoodQualityMotionEvidence) {
+      _consumeGpsMotionEvidence(update);
+    }
 
-    _acceptMovementPoint(point);
+    if (update.isAnchorEstablished) {
+      _lastAcceptedRawPoint = point;
+      _persistRawPoints([point]);
+      return;
+    }
+    if (!update.isAccepted) return;
+
+    _lastAcceptedRawPoint = update.point;
+    distanceKm.value = _distanceAccumulator.totalDistanceMetres / 1000;
+    _updateDisplayedPace(update.point);
+    _persistRawPoints(update.creditedPoints);
+    _maybeSpeakProgressCue();
   }
 
-  void _acceptMovementPoint(GpsPoint rawPoint) {
+  void _consumeGpsMotionEvidence(GpsDistanceUpdate update) {
+    final point = update.point;
+    final speed = update.rawSegmentSpeedMetresPerSecond!;
+    _debugGps(point, speed: speed, passed: true);
+    final oldGpsState = _detector.currentState;
+    _detector.addSpeedSample(speed, point.timestamp);
+    _movementSegmentRecorder.addSpeedSample(speed);
+    _applyFusionDecision(
+      _motionFusion.addGpsSpeed(
+        speedMetresPerSecond: speed,
+        isGoodQuality: true,
+        timestamp: point.timestamp,
+      ),
+      point.timestamp,
+    );
+    if (kDebugMode && oldGpsState != _detector.currentState) {
+      _debugLog(
+        '[WalkRun] gps-observed $oldGpsState->${_detector.currentState} '
+        'speed=${speed.toStringAsFixed(2)}m/s '
+        '${_fusionDebugSummary()}',
+      );
+    }
+  }
+
+  /// EMA deliberately affects only the pace shown live. Canonical distance is
+  /// accumulated above from raw, quality-filtered GPS segments.
+  void _updateDisplayedPace(GpsPoint rawPoint) {
     final point = _emaSmoothedPoint(rawPoint);
-    final previous = _lastValidRawPoint;
+    final previous = _lastSmoothedPoint;
     if (previous != null) {
       final seconds =
           point.timestamp.difference(previous.timestamp).inMilliseconds /
               Duration.millisecondsPerSecond;
-      if (seconds <= 0) return;
-      final speed = _haversineMetres(previous, point) / seconds;
-      if (speed > _maxValidSpeedMetresPerSecond) {
-        _debugGps(point, speed: speed, passed: false);
-        gpsJumpCount.value++;
-        return;
+      if (seconds > 0) {
+        final speed = _haversineMetres(previous, point) / seconds;
+        if (speed <= _maxValidSpeedMetresPerSecond) {
+          currentPaceSecPerKm.value = speed <= 0 ? 0 : 1000 / speed;
+        }
       }
-      _debugGps(point, speed: speed, passed: true);
-      currentPaceSecPerKm.value = speed <= 0 ? 0 : 1000 / speed;
-      final oldGpsState = _detector.currentState;
-      _detector.addSpeedSample(speed, point.timestamp);
-      final gpsState = _detector.currentState;
-      if (!isStepSensorAvailable.value) {
-        _setMovementState(gpsState, point.timestamp, trigger: 'gps-fallback');
-      }
-      _movementSegmentRecorder.addSpeedSample(speed);
-      if (kDebugMode && oldGpsState != gpsState) {
-        _debugLog(
-            '[WalkRun] transition at ${point.timestamp.toIso8601String()} '
-            'trigger=gps ${_cadenceDebugSummary(point.timestamp)} '
-            'gpsAvg=${_detector.rollingAverageSpeed?.toStringAsFixed(2) ?? 'n/a'}m/s '
-            'gpsState=$oldGpsState->$gpsState '
-            'primaryState=${movementState.value}');
-      }
-    } else {
-      _debugGps(point, speed: null, passed: true);
     }
     _lastSmoothedPoint = point;
-    _lastValidRawPoint = point;
-    if (_lastPersistedPoint == null ||
-        point.timestamp.difference(_lastPersistedPoint!.timestamp) >=
-            _sampleInterval) {
-      _sampledPoints.add(point);
-      _lastPersistedPoint = point;
-      distanceKm.value = _distanceFromSampledPoints();
-      _maybeSpeakProgressCue();
+  }
+
+  void _persistRawPoints(List<GpsPoint> points) {
+    for (final point in points) {
+      if (_lastPersistedPoint == null ||
+          point.timestamp.difference(_lastPersistedPoint!.timestamp) >=
+              _sampleInterval) {
+        _sampledPoints.add(point);
+        _lastPersistedPoint = point;
+      }
     }
   }
 
@@ -322,68 +392,73 @@ class TrackerController extends GetxController {
     }
 
     isStepSensorAvailable.value = true;
-    _stepCadenceDetector.setTransitionGuard(_canCommitCadenceTransition);
+    _motionFusion.setCadenceSensorAvailable(true, DateTime.now());
     await _stepCadenceDetector.start(
       onReading: _onStepCadenceReading,
       onUnavailable: _activateGpsFallback,
     );
   }
 
-  void _onStepCadenceReading(StepCadenceReading reading) {
+  void _injectSyntheticStepCount(int cumulativeSteps, DateTime timestamp) {
+    if (!kDebugMode) return;
+    _stepCadenceDetector.ingestStepCount(cumulativeSteps, timestamp);
+    _onStepCadenceReading(_stepCadenceDetector.refreshAt(timestamp), timestamp);
+  }
+
+  void _onStepCadenceReading(
+    StepCadenceReading reading, [
+    DateTime? readingTimestamp,
+  ]) {
     _lastCadenceReading = reading;
     stepCadenceSpm.value = reading.cadenceSpm;
     isStepSensorAvailable.value = reading.isSensorAvailable;
+    final timestamp = readingTimestamp ?? DateTime.now();
+    final fusionDecision = _motionFusion.addCadenceReading(reading, timestamp);
     if (kDebugMode) {
-      if (reading.runningTransitionVetoed) {
-        final gpsAverage = _detector.rollingAverageSpeed;
+      if (fusionDecision.runningVetoed || reading.runningTransitionVetoed) {
         _debugLog('[WalkRun] cadence-running VETOED '
             'cadence=${reading.cadenceSpm.toStringAsFixed(1)}spm '
             'confirmed=${reading.confirmationCount}/${reading.transitionConfirmationsRequired} '
-            'gpsAvg=${gpsAverage?.toStringAsFixed(2) ?? 'n/a'}m/s '
-            'required>=${_minimumGpsSpeedForRunningMetresPerSecond.toStringAsFixed(1)}m/s');
+            'gpsSlowStreak=${fusionDecision.gpsSlowStreak}/${_motionFusion.requiredGpsEvidenceSamples} '
+            'reason=${fusionDecision.source}');
       } else if (reading.transitioned) {
         _debugLog('[WalkRun] cadence confirmed ${reading.confirmationCount}/'
             '${reading.transitionConfirmationsRequired} '
-            '${reading.classification} '
-            'cadence=${reading.cadenceSpm.toStringAsFixed(1)}spm');
+            '${reading.classification} cadence=${reading.cadenceSpm.toStringAsFixed(1)}spm '
+            '${_fusionDebugSummary()}');
       } else if (reading.hasPendingTransition) {
         _debugLog(
             '[WalkRun] pending ${reading.pendingClassification}, confirmed '
             '${reading.pendingConfirmations}/${reading.transitionConfirmationsRequired} '
             'cadence=${reading.cadenceSpm.toStringAsFixed(1)}spm '
-            'gpsState=${_detector.currentState}');
+            'gpsState=${_detector.currentState} ${_fusionDebugSummary()}');
       }
     }
-    if (reading.isSensorAvailable) {
-      _setMovementState(
-        reading.classification,
-        DateTime.now(),
-        trigger: 'cadence',
-      );
-    }
-  }
-
-  /// Cadence remains authoritative for walking and stationary transitions.
-  /// GPS only vetoes a cadence-led transition *to* running when its rolling
-  /// speed still clearly indicates walking-level movement.
-  bool _canCommitCadenceTransition(StepCadenceTransition transition) {
-    if (transition.to != 'running') return true;
-    final gpsAverage = _detector.rollingAverageSpeed;
-    return gpsAverage != null &&
-        gpsAverage >= _minimumGpsSpeedForRunningMetresPerSecond;
+    _applyFusionDecision(fusionDecision, timestamp);
   }
 
   void _activateGpsFallback(Object reason) {
     isStepSensorAvailable.value = false;
     stepCadenceSpm.value = 0;
-    _setMovementState(
-      _detector.currentState,
+    _applyFusionDecision(
+      _motionFusion.setCadenceSensorAvailable(false, DateTime.now()),
       DateTime.now(),
-      trigger: 'gps-fallback',
     );
     if (kDebugMode) {
       _debugLog('[StepCadence] unavailable; GPS fallback enabled: $reason');
     }
+  }
+
+  void _applyFusionDecision(
+    MotionFusionDecision decision,
+    DateTime timestamp,
+  ) {
+    if (!decision.transitioned) return;
+    _setMovementState(
+      decision.state,
+      timestamp,
+      trigger: decision.source,
+    );
   }
 
   void _setMovementState(
@@ -412,6 +487,11 @@ class TrackerController extends GetxController {
         'pending=$pending confirmed=${reading.confirmationCount}/${reading.transitionConfirmationsRequired} '
         'vetoed=${reading.runningTransitionVetoed}';
   }
+
+  String _fusionDebugSummary() => 'fusion=${_motionFusion.currentState} '
+      'gpsRun=${_motionFusion.gpsRunningStreak}/${_motionFusion.requiredGpsEvidenceSamples} '
+      'gpsSlow=${_motionFusion.gpsSlowStreak}/${_motionFusion.requiredGpsEvidenceSamples} '
+      'cadenceLow=${_motionFusion.cadenceLowStreak}/${_motionFusion.requiredCadenceLowSamples}';
 
   void toggleVoice() {
     isVoiceEnabled.value = !isVoiceEnabled.value;
@@ -477,15 +557,6 @@ class TrackerController extends GetxController {
     }
   }
 
-  double _distanceFromSampledPoints() {
-    var metres = 0.0;
-    for (var index = 1; index < _sampledPoints.length; index++) {
-      metres +=
-          _haversineMetres(_sampledPoints[index - 1], _sampledPoints[index]);
-    }
-    return metres / 1000;
-  }
-
   static double _haversineMetres(GpsPoint first, GpsPoint second) {
     const radius = 6371000.0;
     final latDelta = _radians(second.latitude - first.latitude);
@@ -541,19 +612,22 @@ class TrackerController extends GetxController {
         'jump=${passed ? 'pass' : 'rejected'}');
   }
 
-  void _debugGpsFilter({
-    required double rawDistanceMetres,
-    required double? accuracyMetres,
-    required bool passed,
-    double? requiredDisplacementMetres,
-    bool isInitialPoint = false,
-  }) {
+  void _debugGpsDistanceUpdate(GpsDistanceUpdate update) {
     if (!kDebugMode) return;
+    final status = switch (update.kind) {
+      GpsDistanceUpdateKind.waitingForWarmUp => 'waiting-for-warmup',
+      GpsDistanceUpdateKind.anchorEstablished => 'anchor-established',
+      GpsDistanceUpdateKind.buffered => 'buffered',
+      GpsDistanceUpdateKind.accepted => 'accepted',
+      GpsDistanceUpdateKind.rejectedJump => 'rejected-jump',
+      GpsDistanceUpdateKind.ignored => 'ignored',
+    };
     _debugLog(
-        '[GPS FILTER] rawDistance=${rawDistanceMetres.toStringAsFixed(2)}m '
-        'accuracy=${accuracyMetres?.toStringAsFixed(2) ?? 'n/a'}m '
-        'threshold=${requiredDisplacementMetres?.toStringAsFixed(2) ?? 'n/a'}m '
-        '${isInitialPoint ? 'initial' : (passed ? 'passed' : 'filtered-noise')}');
+        '[GPS FILTER] rawSegment=${update.rawSegmentDistanceMetres.toStringAsFixed(2)}m '
+        'accuracy=${update.point.accuracy?.toStringAsFixed(2) ?? 'n/a'}m '
+        'pending=${update.pendingCount}/${update.requiredConfirmations} '
+        'credited=${update.creditedDistanceMetres.toStringAsFixed(2)}m '
+        'status=$status');
   }
 
   void _debugLog(String message) {

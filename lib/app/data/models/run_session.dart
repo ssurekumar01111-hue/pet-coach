@@ -107,7 +107,10 @@ class RunSession {
         'gpsTrack':
             sampledGpsTrackForStorage().map((point) => point.toMap()).toList(),
         'segments': segments.map((segment) => segment.toMap()).toList(),
-        'totalDistanceKm': computeTotalDistanceKm(),
+        // TrackerController maintains this from every accepted raw GPS
+        // segment. Recomputing from the intentionally sparse Firestore track
+        // would undercount turns and any points omitted for document size.
+        'totalDistanceKm': totalDistanceKm,
         // This is the stopwatch-tracked active duration. Deriving it from
         // wall-clock timestamps would incorrectly include paused time.
         'totalTimeSec': totalTimeSec,

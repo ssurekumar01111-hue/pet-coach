@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:pedometer/pedometer.dart';
 
 /// Primary movement signal backed by the platform step counter.
@@ -24,7 +25,15 @@ class StepCadenceDetector {
         _committedClassification =
             sensorAvailable ? 'stationary' : 'unavailable';
 
-  static const runningCadenceThresholdSpm = 155.0;
+  /// A higher cadence is required to enter running than to leave it. This
+  /// hysteresis keeps a runner whose device reports 140-160 spm from
+  /// repeatedly bouncing between walking and running around one cutoff.
+  static const runningCadenceEnterThresholdSpm = 155.0;
+  static const runningCadenceExitThresholdSpm = 140.0;
+
+  /// Kept as a compatibility alias for callers/tests that reference the old
+  /// single threshold. New classification uses the explicit enter/exit pair.
+  static const runningCadenceThresholdSpm = runningCadenceEnterThresholdSpm;
 
   final Duration window;
   final int transitionConfirmations;
@@ -123,6 +132,20 @@ class StepCadenceDetector {
     _clearPendingTransition();
   }
 
+  /// Prepares the deterministic detector for debug-only synthetic input.
+  /// Production tracking always initializes it through [start].
+  void enableSyntheticInput() {
+    if (!kDebugMode) return;
+    _sensorAvailable = true;
+    _receivedFirstStepEvent = true;
+    _stepTimes.clear();
+    _lastSystemStepCount = null;
+    _committedClassification = 'stationary';
+    _clearPendingTransition();
+    _firstReadingTimer?.cancel();
+    _firstReadingTimer = null;
+  }
+
   void _handleFirstReadingTimeout() {
     if (!_sensorAvailable || _receivedFirstStepEvent) return;
     _markUnavailable(
@@ -219,7 +242,11 @@ class StepCadenceDetector {
   String _rawClassificationFor(double cadenceSpm) {
     if (!_sensorAvailable) return 'unavailable';
     if (cadenceSpm == 0) return 'stationary';
-    if (cadenceSpm < runningCadenceThresholdSpm) return 'walking';
+    if (_committedClassification == 'running' &&
+        cadenceSpm >= runningCadenceExitThresholdSpm) {
+      return 'running';
+    }
+    if (cadenceSpm < runningCadenceEnterThresholdSpm) return 'walking';
     return 'running';
   }
 }

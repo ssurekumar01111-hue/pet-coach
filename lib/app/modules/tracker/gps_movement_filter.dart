@@ -2,8 +2,13 @@ import 'dart:math' as math;
 
 import '../../data/models/gps_point.dart';
 
-/// Decides whether a raw GPS displacement is credible enough to represent
-/// movement. This deliberately runs before pace, distance, or walk/run logic.
+/// Shared geographic helpers and lightweight confidence guidance for GPS
+/// movement processing.
+///
+/// A reported horizontal accuracy is a confidence radius, not a displacement
+/// threshold. In particular, a 20 m accuracy reading does not mean that a
+/// legitimate 10 m movement should be discarded. The stateful
+/// [GpsDistanceAccumulator] turns this guidance into buffered acceptance.
 class GpsMovementFilter {
   const GpsMovementFilter._();
 
@@ -19,15 +24,25 @@ class GpsMovementFilter {
             currentAccuracyMetres > 0
         ? currentAccuracyMetres
         : 0.0;
-    // A point inside its own horizontal accuracy radius is indistinguishable
-    // from stationary GPS drift. The 3 m floor catches very small jitter too.
-    final requiredDisplacement = math.max(minimumDisplacementMetres, accuracy);
+    // Keep a fixed micro-jitter floor. Accuracy changes the number of
+    // confirmations required by the accumulator; it is deliberately not a
+    // hard displacement threshold.
+    const requiredDisplacement = minimumDisplacementMetres;
     return GpsMovementDecision(
       rawDistanceMetres: rawDistanceMetres,
       accuracyMetres: accuracy,
       requiredDisplacementMetres: requiredDisplacement,
       countsAsMovement: rawDistanceMetres >= requiredDisplacement,
+      confirmationsRequired: _confirmationsForAccuracy(accuracy),
     );
+  }
+
+  static int _confirmationsForAccuracy(double accuracy) {
+    // Two outward, directionally aligned readings are enough to recover a
+    // genuine 10-13m move even when the platform briefly reports 20-35m
+    // accuracy. Very weak fixes still need an extra confirmation.
+    if (accuracy <= 35) return 2;
+    return 3;
   }
 
   static double haversineMetres(GpsPoint first, GpsPoint second) {
@@ -51,10 +66,12 @@ class GpsMovementDecision {
     required this.accuracyMetres,
     required this.requiredDisplacementMetres,
     required this.countsAsMovement,
+    required this.confirmationsRequired,
   });
 
   final double rawDistanceMetres;
   final double accuracyMetres;
   final double requiredDisplacementMetres;
   final bool countsAsMovement;
+  final int confirmationsRequired;
 }

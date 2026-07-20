@@ -11,8 +11,23 @@ plugins {
 
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+if (!keystorePropertiesFile.exists()) {
+    throw GradleException(
+        "Missing android/key.properties. A real release keystore is required for builds.",
+    )
+}
+keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+
+fun requiredKeystoreProperty(name: String): String =
+    keystoreProperties.getProperty(name)?.takeIf { it.isNotBlank() }
+        ?: throw GradleException("Missing '$name' in android/key.properties.")
+
+val releaseStoreFile = rootProject.file(requiredKeystoreProperty("storeFile"))
+if (!releaseStoreFile.exists()) {
+    throw GradleException(
+        "Release keystore not found at ${releaseStoreFile.absolutePath}. " +
+            "Update android/key.properties before building.",
+    )
 }
 
 android {
@@ -43,21 +58,18 @@ android {
 
     signingConfigs {
         create("release") {
-            keyAlias = keystoreProperties.getProperty("keyAlias")
-            keyPassword = keystoreProperties.getProperty("keyPassword")
-            storeFile = keystoreProperties.getProperty("storeFile")?.let { rootProject.file(it) }
-            storePassword = keystoreProperties.getProperty("storePassword")
+            keyAlias = requiredKeystoreProperty("keyAlias")
+            keyPassword = requiredKeystoreProperty("keyPassword")
+            storeFile = releaseStoreFile
+            storePassword = requiredKeystoreProperty("storePassword")
         }
     }
 
     buildTypes {
         release {
-            val releaseSigningConfig = signingConfigs.findByName("release")
-            if (releaseSigningConfig != null && releaseSigningConfig.storeFile?.exists() == true) {
-                signingConfig = releaseSigningConfig
-            } else {
-                signingConfig = signingConfigs.getByName("debug")
-            }
+            // Never fall back to debug signing. Missing release credentials
+            // fail during Gradle configuration with the message above.
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }

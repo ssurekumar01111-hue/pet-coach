@@ -1,10 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pet_coach_ai/app/data/models/gps_point.dart';
+import 'package:pet_coach_ai/app/modules/tracker/gps_distance_accumulator.dart';
 import 'package:pet_coach_ai/app/modules/tracker/gps_movement_filter.dart';
-import 'package:pet_coach_ai/app/modules/tracker/walk_run_detector.dart';
 
 void main() {
-  test('stationary GPS jitter stays at zero distance and walking state', () {
+  test('stationary GPS jitter stays at zero canonical distance', () {
     final start = DateTime(2026, 7, 18, 6, 30);
     // Positions remain inside a typical 10 m accuracy radius around one chair.
     final offsetsMetres = <(double north, double east)>[
@@ -28,42 +28,29 @@ void main() {
       );
     }).toList();
 
-    final detector = WalkRunDetector();
-    var acceptedDistanceMetres = 0.0;
-    var acceptedSamples = 0;
-    for (var index = 1; index < points.length; index++) {
-      final rawDistance =
-          GpsMovementFilter.haversineMetres(points[index - 1], points[index]);
-      final decision = GpsMovementFilter.evaluate(
-        rawDistanceMetres: rawDistance,
-        currentAccuracyMetres: points[index].accuracy,
-      );
-      if (!decision.countsAsMovement) continue;
-
-      acceptedDistanceMetres += rawDistance;
-      acceptedSamples++;
-      detector.addSpeedSample(rawDistance / 5, points[index].timestamp);
+    final accumulator = GpsDistanceAccumulator();
+    for (final point in points) {
+      accumulator.add(point);
     }
 
-    expect(acceptedSamples, 0);
-    expect(acceptedDistanceMetres, closeTo(0, .001));
-    expect(detector.currentState, 'walking');
+    expect(accumulator.totalDistanceMetres, closeTo(0, .001));
   });
 
-  test('requires at least the accuracy radius and 3 metre floor', () {
+  test('uses accuracy as buffered confidence, not a hard displacement gate',
+      () {
     expect(
       GpsMovementFilter.evaluate(
         rawDistanceMetres: 4.9,
         currentAccuracyMetres: 5,
       ).countsAsMovement,
-      isFalse,
+      isTrue,
     );
     expect(
       GpsMovementFilter.evaluate(
-        rawDistanceMetres: 3.0,
-        currentAccuracyMetres: 1,
-      ).countsAsMovement,
-      isTrue,
+        rawDistanceMetres: 10,
+        currentAccuracyMetres: 25,
+      ).confirmationsRequired,
+      2,
     );
   });
 }
